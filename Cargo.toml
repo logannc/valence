@@ -1,0 +1,7 @@
+[package]
+name = "valence"
+version = "0.1.0"
+authors = ["Logan Collins <logan.neal.collins@gmail.com>"]
+edition = "2018"
+
+[dependencies]
