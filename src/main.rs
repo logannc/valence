@@ -1,10 +1,21 @@
-extern crate tokio;
 extern crate clap;
+#[macro_use]
+extern crate serde_derive;
+extern crate bincode;
+extern crate bytes;
+extern crate futures;
+extern crate tokio;
+extern crate uuid;
+extern crate rand;
+// extern crate tokio_codec;
+// extern crate tokio_serde_bincode;
 
-use clap::{Arg, App};
-
-mod server;
 mod client;
+mod network;
+mod server;
+mod types;
+
+use clap::{App, Arg};
 
 fn main() {
     let matches = App::new("Simple Chat Application")
@@ -25,9 +36,9 @@ fn main() {
     if let Some(port) = matches.value_of("listen") {
         self::server::start_server(port.parse().expect("Expected an integer port number."));
     } else if let Some(addr) = matches.value_of("server") {
-        self::client::start_client(addr.into());
+        self::client::start_client(addr.parse().expect("Expected an IP:PORT argument."));
     } else {
-        // SERVER should have been required by clap if `listen` wasn't provided.
+        // `server` should have been required by clap if `listen` wasn't provided.
         unreachable!();
     }
 }
