@@ -32,13 +32,16 @@ fn main() {
                                 .value_name("SERVER")
                                 .help("The server address:port to connect to.")
                                 .required_unless("listen"))
+                        .arg(Arg::with_name("nickname")
+                                .value_name("NICKNAME")
+                                .help("Your display name when you join the server.")
+                                .required_unless("listen"))
                         .get_matches();
     if let Some(port) = matches.value_of("listen") {
         self::server::start_server(port.parse().expect("Expected an integer port number."));
-    } else if let Some(addr) = matches.value_of("server") {
-        self::client::start_client(addr.parse().expect("Expected an IP:PORT argument."));
     } else {
-        // `server` should have been required by clap if `listen` wasn't provided.
-        unreachable!();
+        let addr = matches.value_of("server").unwrap(); // Should be impossible to fail due to `required_unless`.
+        let nick = matches.value_of("nickname").unwrap(); // Should be impossible to fail due to `required_unless`.
+        self::client::start_client(addr.parse().expect("Expected an IP:PORT argument."), nick.into());
     }
 }

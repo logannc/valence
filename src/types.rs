@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 
 pub type ClientName = String;
 type ChatMessage = String;
