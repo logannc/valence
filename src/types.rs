@@ -1,4 +1,3 @@
-
 pub type ClientName = String;
 type ChatMessage = String;
 

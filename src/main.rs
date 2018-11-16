@@ -4,11 +4,9 @@ extern crate serde_derive;
 extern crate bincode;
 extern crate bytes;
 extern crate futures;
+extern crate rand;
 extern crate tokio;
 extern crate uuid;
-extern crate rand;
-// extern crate tokio_codec;
-// extern crate tokio_serde_bincode;
 
 mod client;
 mod network;
@@ -42,6 +40,9 @@ fn main() {
     } else {
         let addr = matches.value_of("server").unwrap(); // Should be impossible to fail due to `required_unless`.
         let nick = matches.value_of("nickname").unwrap(); // Should be impossible to fail due to `required_unless`.
-        self::client::start_client(addr.parse().expect("Expected an IP:PORT argument."), nick.into());
+        self::client::start_client(
+            addr.parse().expect("Expected an IP:PORT argument."),
+            nick.into(),
+        );
     }
 }

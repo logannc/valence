@@ -1,16 +1,16 @@
-use bincode::{serialize, deserialize};
-use crate::types::{ClientMessage, ServerMessage, ClientName};
-use tokio::prelude::*;
-use tokio::net::TcpStream;
+use bincode::{deserialize, serialize};
+use bytes::{Bytes, BytesMut};
+use crate::types::{ClientMessage, ClientName, ServerMessage};
+use futures::Sink;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use uuid::Uuid;
-use bytes::{Bytes, BytesMut};
-use futures::Sink;
 use tokio::io::{ReadHalf, WriteHalf};
-use serde::Serialize;
+use tokio::net::TcpStream;
+use tokio::prelude::*;
+use uuid::Uuid;
 
 pub struct Peer {
     writer: FramedWrite<WriteHalf<TcpStream>, LengthDelimitedCodec>,
@@ -21,24 +21,36 @@ pub type Peers = Arc<Mutex<HashMap<Uuid, Peer>>>;
 type FramedReader = FramedRead<ReadHalf<TcpStream>, LengthDelimitedCodec>;
 type FramedWriter = FramedWrite<WriteHalf<TcpStream>, LengthDelimitedCodec>;
 
-fn start_send_message<'a, T, I>(msg: T, peers: I) where T: Serialize, I: Iterator<Item=&'a mut Peer>{
+fn start_send_message<'a, T, I>(msg: T, peers: I)
+where
+    T: Serialize,
+    I: Iterator<Item = &'a mut Peer>,
+{
     let serialized_msg: Bytes = serialize(&msg).unwrap().into();
     for peer in peers {
         peer.writer.start_send(serialized_msg.clone());
     }
 }
 
-fn start_send_all<T>(msg: T, peers: &mut Peers) where T: Serialize {
+fn start_send_all<T>(msg: T, peers: &mut Peers)
+where
+    T: Serialize,
+{
     start_send_message(msg, peers.lock().unwrap().values_mut());
 }
 
 fn flush_peers(peers: &mut Peers) {
     for peer in peers.lock().unwrap().values_mut() {
-        peer.writer.poll_complete(); 
+        peer.writer.poll_complete();
     }
 }
 
-fn handshake_handler(buf: BytesMut, framed_reader: FramedReader, framed_writer: FramedWriter, mut peers: Peers) -> Result<(Uuid, FramedReader), Error> {
+fn handshake_handler(
+    buf: BytesMut,
+    framed_reader: FramedReader,
+    framed_writer: FramedWriter,
+    mut peers: Peers,
+) -> Result<(Uuid, FramedReader), Error> {
     match deserialize(&*buf) {
         Ok(cm) => match cm {
             // Client joined with a nickname...
@@ -46,15 +58,19 @@ fn handshake_handler(buf: BytesMut, framed_reader: FramedReader, framed_writer: 
                 let ID = Uuid::new_v4();
                 start_send_all(ServerMessage::Joined(name.clone()), &mut peers);
                 flush_peers(&mut peers);
-                peers.lock().unwrap().insert(ID, Peer{ writer: framed_writer, nickname: name});
+                peers.lock().unwrap().insert(
+                    ID,
+                    Peer {
+                        writer: framed_writer,
+                        nickname: name,
+                    },
+                );
                 Ok((ID, framed_reader))
             }
             // Client sent some other kind of message first. Error out.
-            _ => {
-                Err(Error::from(ErrorKind::InvalidData))
-            },
+            _ => Err(Error::from(ErrorKind::InvalidData)),
         },
-        Err(_) => Err(Error::from(ErrorKind::InvalidData))
+        Err(_) => Err(Error::from(ErrorKind::InvalidData)),
     }
 }
 
@@ -62,25 +78,36 @@ fn handle_client_message(msg: ClientMessage, ID: Uuid, peers: &mut Peers) -> Res
     match msg {
         ClientMessage::Message(msg) => {
             let msg = ServerMessage::Message(msg, peers.lock().unwrap()[&ID].nickname.clone());
-            start_send_message(msg, peers.lock().unwrap().iter_mut().filter(|(&k, v)| k != ID).map(|(_, v)| v));
+            start_send_message(
+                msg,
+                peers
+                    .lock()
+                    .unwrap()
+                    .iter_mut()
+                    .filter(|(&k, v)| k != ID)
+                    .map(|(_, v)| v),
+            );
             Ok(())
-        },
+        }
         ClientMessage::Nickname(name) => {
             let old_nickname = peers.lock().unwrap()[&ID].nickname.clone();
             let name_clone = name.clone();
-            peers.lock().unwrap().entry(ID).and_modify(|peer|{
+            peers.lock().unwrap().entry(ID).and_modify(|peer| {
                 peer.nickname = name_clone;
             });
-            let msg = ServerMessage::ServerText(format!("{} changed their name to {}.", old_nickname, name));
+            let msg = ServerMessage::ServerText(format!(
+                "{} changed their name to {}.",
+                old_nickname, name
+            ));
             start_send_all(msg, peers);
             Ok(())
-        },
+        }
         ClientMessage::Quit => {
             // let peer = peers.lock().unwrap().remove(&ID).unwrap();
             // let msg = ServerMessage::Quit(peer.nickname);
             // start_send_all(msg, &mut peers);
             Err(Error::from(ErrorKind::ConnectionAborted))
-        },
+        }
         ClientMessage::Join(name) => Ok(()), // Ignore this misbehaving message.
     }
 }
@@ -88,7 +115,7 @@ fn handle_client_message(msg: ClientMessage, ID: Uuid, peers: &mut Peers) -> Res
 fn handle_frame(frame: BytesMut, ID: Uuid, mut peers: Peers) -> Result<(), Error> {
     let result = match deserialize(&*frame) {
         Ok(msg) => handle_client_message(msg, ID, &mut peers),
-        Err(err) => Err(Error::from(ErrorKind::InvalidData)), 
+        Err(err) => Err(Error::from(ErrorKind::InvalidData)),
     };
     for peer in peers.lock().unwrap().values_mut() {
         peer.writer.poll_complete();
@@ -110,9 +137,12 @@ fn spawn_message_handler(input: (Uuid, FramedReader), peers: Peers) -> Result<()
     let (ID, framed_reader) = input;
     let peers_clone = peers.clone();
     let handler = framed_reader
-                    .for_each(move|frame| { handle_frame(frame, ID, peers.clone()) })
-                    .and_then(move|_| handle_disconnect(ID, peers_clone))
-                    .or_else(|err| { panic!("error: {}", err); Ok(()) });
+        .for_each(move |frame| handle_frame(frame, ID, peers.clone()))
+        .and_then(move |_| handle_disconnect(ID, peers_clone))
+        .or_else(|err| {
+            panic!("error: {}", err);
+            Ok(())
+        });
     tokio::spawn(handler);
     Ok(())
 }
@@ -135,9 +165,8 @@ pub fn socket_handler(socket: TcpStream, peers: Peers) -> Result<(), Error> {
                 |buf| handshake_handler(buf, framed_reader, framed_writer, peers),
             )
         })
-        .and_then(|input|{
-            spawn_message_handler(input, peers_clone)
-        }).map_err(|err| panic!("annother server error: {}", err));
+        .and_then(|input| spawn_message_handler(input, peers_clone))
+        .map_err(|err| panic!("annother server error: {}", err));
     tokio::spawn(frame_handler);
     Ok(())
 }
